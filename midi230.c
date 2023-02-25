@@ -2,7 +2,7 @@
 #include <stdio.h>
 #include <string.h>
 
-const char *KEYWORD = "noteblock_harp";
+char *KEYWORD = "noteblock_harp";
 const int PITCH_OFFSET = 66;
 const unsigned short MAX_VOLUME = 100;
 const char CUTOFF_VEL = 0;
@@ -106,7 +106,7 @@ void freeevents(struct event *item)
 void freetrackconfig(struct track *trackconfig, short ntracks)
 {
     for (short i = 0; i < ntracks; ++i)
-        if (trackconfig[i].keyword)
+        if (trackconfig[i].keyword != KEYWORD)
             free(trackconfig[i].keyword);
     free(trackconfig);
 }
@@ -249,7 +249,7 @@ int main(int argc, char **argv)
         // Set default values
         for (short i = 0; i < ntracks; ++i)
         {
-            trackconfig[i].keyword = NULL;
+            trackconfig[i].keyword = KEYWORD;
             trackconfig[i].offset = PITCH_OFFSET;
             trackconfig[i].maxvol = MAX_VOLUME;
             trackconfig[i].minvel = CUTOFF_VEL;
@@ -472,11 +472,8 @@ int main(int argc, char **argv)
             return EXIT_FAILURE;
         }
 
-        const int MIDI_PITCH_TO_PITCH = -66;
-        // TODO: Should assume 120 bpm
-        // TODO: Merge consecutive padded tempo changes
         // Microseconds per midi quarter note
-        unsigned int microsperquarter = 6000000;
+        unsigned int microsperquarter = 5e5;
         double lastmicrosdelta = 0;
         int lastvolume = -1;
         struct event *trackhead = eventlist;
