@@ -33,7 +33,7 @@ enum eventtype
 {
     NOTE_ON,
     TEMPO,
-    DUMMY,
+    START,
     TRACK_NAME
 };
 
@@ -84,6 +84,18 @@ void ignore(FILE *f, size_t size)
 {
     for (size_t i = 0; i < size; ++i)
         fgetc(f);
+}
+
+void cleanup(struct event *item)
+{
+    if (item != NULL)
+        do
+        {
+            struct event *temp = item;
+            item = item->next;
+            free(temp->data);
+            free(temp);
+        } while (item != NULL);
 }
 
 void printhelptext(void)
@@ -164,7 +176,9 @@ int main(int argc, char **argv)
     }
 
     // Starting dummy track event
-    struct event dummy = {0, DUMMY, NULL, NULL};
+    struct event placeholderevent = {0, START, NULL, NULL};
+    // Pointer to the first actual item in the event list
+    struct event *eventlist = NULL;
 
     // Ticks per quarter note
     short division;
@@ -193,6 +207,7 @@ int main(int argc, char **argv)
             if (strcmp(magic, "MThd") != 0 || size != 6)
             {
                 fprintf(stderr, "Unknown file type\n");
+                fclose(midi);
                 return EXIT_FAILURE;
             }
 
@@ -203,60 +218,8 @@ int main(int argc, char **argv)
             if (format == 2 || division < 0)
             {
                 fprintf(stderr, "Unable to interpret midi files of this format\n");
+                fclose(midi);
                 return EXIT_FAILURE;
-            }
-        }
-
-        trackconfig = malloc(sizeof(struct track) * ntracks);
-
-        for (short i = 0; i < ntracks; ++i)
-        {
-            trackconfig[i].keyword = KEYWORD;
-            trackconfig[i].offset = PITCH_OFFSET;
-            trackconfig[i].maxvol = MAX_VOLUME;
-            trackconfig[i].minvel = CUTOFF_VEL;
-        }
-
-        // Read config file
-        if (configfname)
-        {
-            FILE *conf = fopen(configfname, "r");
-
-            if (conf == NULL)
-            {
-                const char fmt[] = "Unable to open config file '%s'";
-                char err[strlen(configfname) + sizeof(fmt)];
-                snprintf(err, sizeof(err), fmt, configfname);
-                perror(err);
-                return EXIT_FAILURE;
-            }
-
-            short t = 0;
-            char line[128];
-            while (fgets(line, sizeof(line), conf))
-            {
-                char *s = line;
-                while (*s == ' ' || *s == '\t')
-                    ++s;
-
-                if (*s == '#' || strlen(s) == 0)
-                    continue;
-
-                char *tokens[4];
-                for (int i = 0; i < 4; ++i)
-                {
-                    tokens[i] = strtok(i ? NULL : line, ", \t");
-                    if (tokens[i] == NULL)
-                    {
-                        fprintf(stderr, "Syntax error in config file");
-                        return EXIT_FAILURE;
-                    }
-                }
-                trackconfig[t].keyword = tokens[0];
-                trackconfig[t].offset = atoi(tokens[1]);
-                trackconfig[t].maxvol = (unsigned short)atoi(tokens[2]);
-                trackconfig[t].minvel = (char)atoi(tokens[3]);
-                t++;
             }
         }
 
@@ -272,13 +235,14 @@ int main(int argc, char **argv)
                 // Parse if midi track chunk is found
                 if (strcmp(chunktype, "MTrk") == 0)
                 {
-                    info[t++] = parsetrack(midi, &dummy);
+                    info[t++] = parsetrack(midi, &placeholderevent);
                 }
                 // Ignore unknown chunks
                 else
                     ignore(midi, size);
             }
         }
+        eventlist = placeholderevent.next;
 
         // Done reading
         fclose(midi);
@@ -293,6 +257,11 @@ int main(int argc, char **argv)
             printf("Track   Notes   Name\n");
             for (short t = 0; t < ntracks; ++t)
                 printf("%5d %7lu   %s\n", t + 1, info[t].notes, info[t].name ? info[t].name : "");
+
+            for (short t = 0; t < ntracks; ++t)
+                free(info[t].name);
+            cleanup(eventlist);
+
             return EXIT_SUCCESS;
         }
 
@@ -343,24 +312,96 @@ int main(int argc, char **argv)
             for (short t = 0; t < ntracks; ++t)
                 fprintf(template, "%d, %s, %d, %d, %d\n", t + 1, KEYWORD, PITCH_OFFSET, MAX_VOLUME, CUTOFF_VEL);
 
+            for (short t = 0; t < ntracks; ++t)
+                free(info[t].name);
+            cleanup(eventlist);
+            fclose(template);
+
             return EXIT_SUCCESS;
         }
 
         for (short t = 0; t < ntracks; ++t)
             free(info[t].name);
+
+        // Create track configuration
+        {
+            trackconfig = malloc(sizeof(struct track) * ntracks);
+
+            for (short i = 0; i < ntracks; ++i)
+            {
+                trackconfig[i].keyword = NULL;
+                trackconfig[i].offset = PITCH_OFFSET;
+                trackconfig[i].maxvol = MAX_VOLUME;
+                trackconfig[i].minvel = CUTOFF_VEL;
+            }
+
+            // Read config file
+            if (configfname)
+            {
+                FILE *conf = fopen(configfname, "r");
+
+                if (conf == NULL)
+                {
+                    const char fmt[] = "Unable to open config file '%s'";
+                    char err[strlen(configfname) + sizeof(fmt)];
+                    snprintf(err, sizeof(err), fmt, configfname);
+                    perror(err);
+                    cleanup(eventlist);
+                    return EXIT_FAILURE;
+                }
+
+                short t = 0;
+                char line[128];
+                while (fgets(line, sizeof(line), conf))
+                {
+                    char *s = line;
+                    while (*s == ' ' || *s == '\t' || *s == '\r')
+                        ++s;
+
+                    if (*s == '#' || strlen(s) == 0)
+                        continue;
+
+                    char *tokens[4];
+                    for (int i = 0; i < 4; ++i)
+                    {
+                        tokens[i] = strtok(i ? NULL : line, ", \t\r");
+                        if (tokens[i] == NULL)
+                        {
+                            fprintf(stderr, "Syntax error in config file");
+                            for (short i = 0; i < t; ++i)
+                                free(trackconfig[i].keyword);
+                            cleanup(eventlist);
+                            fclose(conf);
+                            return EXIT_FAILURE;
+                        }
+                    }
+                    char *keyword = malloc(strlen(tokens[0]) + 1);
+                    strcpy(keyword, tokens[0]);
+                    trackconfig[t].keyword = keyword;
+                    trackconfig[t].offset = (int)strtol(tokens[1], NULL, 10);
+                    trackconfig[t].maxvol = (unsigned short)strtol(tokens[2], NULL, 10);
+                    trackconfig[t].minvel = (char)strtol(tokens[3], NULL, 10);
+                    if (++t == ntracks)
+                        break;
+                }
+
+                fclose(conf);
+            }
+        }
     }
 
     // Convert absolute ticks into relative ticks
     {
         unsigned long currenttick = 0;
-        struct event *trackhead = &dummy;
-        do
-        {
-            trackhead = trackhead->next;
-            unsigned long temp = trackhead->tick;
-            trackhead->tick -= currenttick;
-            currenttick = temp;
-        } while (trackhead->next != NULL);
+        struct event *trackhead = eventlist;
+        if (trackhead != NULL)
+            do
+            {
+                unsigned long temp = trackhead->tick;
+                trackhead->tick -= currenttick;
+                currenttick = temp;
+                trackhead = trackhead->next;
+            } while (trackhead != NULL);
     }
 
     // Create the output file
@@ -402,7 +443,7 @@ int main(int argc, char **argv)
         // Microseconds per midi quarter note
         unsigned int microsperquarter = 6000000;
         double lastmicrosdelta = 0;
-        struct event *trackhead = dummy.next;
+        struct event *trackhead = eventlist;
         while (1)
         {
             if (trackhead->type == NOTE_ON)
@@ -465,6 +506,8 @@ int main(int argc, char **argv)
 
         fclose(out);
     }
+
+    cleanup(eventlist);
 
     return 0;
 }
