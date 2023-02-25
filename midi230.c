@@ -115,7 +115,7 @@ void printhelptext(void)
     exit(EXIT_SUCCESS);
 }
 
-struct trackinfo parsetrack(FILE *, struct event *);
+struct trackinfo parsetrack(FILE *, struct event *, struct track *);
 struct event *getnextevent(FILE *, unsigned long *, char *);
 char *getfname(char *);
 
@@ -223,6 +223,71 @@ int main(int argc, char **argv)
             }
         }
 
+        // Create track configuration
+        trackconfig = malloc(sizeof(struct track) * ntracks);
+
+        // Set default values
+        for (short i = 0; i < ntracks; ++i)
+        {
+            trackconfig[i].keyword = NULL;
+            trackconfig[i].offset = PITCH_OFFSET;
+            trackconfig[i].maxvol = MAX_VOLUME;
+            trackconfig[i].minvel = CUTOFF_VEL;
+        }
+
+        // Read config file
+        if (configfname)
+        {
+            FILE *conf = fopen(configfname, "r");
+
+            if (conf == NULL)
+            {
+                const char fmt[] = "Unable to open config file '%s'";
+                char err[strlen(configfname) + sizeof(fmt)];
+                snprintf(err, sizeof(err), fmt, configfname);
+                perror(err);
+                cleanup(eventlist);
+                return EXIT_FAILURE;
+            }
+
+            short t = 0;
+            char line[128];
+            while (fgets(line, sizeof(line), conf))
+            {
+                char *s = line;
+                while (*s == ' ' || *s == '\t' || *s == '\r')
+                    ++s;
+
+                if (*s == '#' || strlen(s) == 0)
+                    continue;
+
+                char *tokens[4];
+                for (int i = 0; i < 4; ++i)
+                {
+                    tokens[i] = strtok(i ? NULL : line, ", \t\r");
+                    if (tokens[i] == NULL)
+                    {
+                        fprintf(stderr, "Syntax error in config file");
+                        for (short i = 0; i < t; ++i)
+                            free(trackconfig[i].keyword);
+                        cleanup(eventlist);
+                        fclose(conf);
+                        return EXIT_FAILURE;
+                    }
+                }
+                char *keyword = malloc(strlen(tokens[0]) + 1);
+                strcpy(keyword, tokens[0]);
+                trackconfig[t].keyword = keyword;
+                trackconfig[t].offset = (int)strtol(tokens[1], NULL, 10);
+                trackconfig[t].maxvol = (unsigned short)strtol(tokens[2], NULL, 10);
+                trackconfig[t].minvel = (char)strtol(tokens[3], NULL, 10);
+                if (++t == ntracks)
+                    break;
+            }
+
+            fclose(conf);
+        }
+
         // Get and merge tracks
         struct trackinfo info[ntracks];
         {
@@ -235,7 +300,7 @@ int main(int argc, char **argv)
                 // Parse if midi track chunk is found
                 if (strcmp(chunktype, "MTrk") == 0)
                 {
-                    info[t++] = parsetrack(midi, &placeholderevent);
+                    info[t++] = parsetrack(midi, &placeholderevent, trackconfig + t);
                 }
                 // Ignore unknown chunks
                 else
@@ -322,72 +387,6 @@ int main(int argc, char **argv)
 
         for (short t = 0; t < ntracks; ++t)
             free(info[t].name);
-
-        // Create track configuration
-        {
-            trackconfig = malloc(sizeof(struct track) * ntracks);
-
-            for (short i = 0; i < ntracks; ++i)
-            {
-                trackconfig[i].keyword = NULL;
-                trackconfig[i].offset = PITCH_OFFSET;
-                trackconfig[i].maxvol = MAX_VOLUME;
-                trackconfig[i].minvel = CUTOFF_VEL;
-            }
-
-            // Read config file
-            if (configfname)
-            {
-                FILE *conf = fopen(configfname, "r");
-
-                if (conf == NULL)
-                {
-                    const char fmt[] = "Unable to open config file '%s'";
-                    char err[strlen(configfname) + sizeof(fmt)];
-                    snprintf(err, sizeof(err), fmt, configfname);
-                    perror(err);
-                    cleanup(eventlist);
-                    return EXIT_FAILURE;
-                }
-
-                short t = 0;
-                char line[128];
-                while (fgets(line, sizeof(line), conf))
-                {
-                    char *s = line;
-                    while (*s == ' ' || *s == '\t' || *s == '\r')
-                        ++s;
-
-                    if (*s == '#' || strlen(s) == 0)
-                        continue;
-
-                    char *tokens[4];
-                    for (int i = 0; i < 4; ++i)
-                    {
-                        tokens[i] = strtok(i ? NULL : line, ", \t\r");
-                        if (tokens[i] == NULL)
-                        {
-                            fprintf(stderr, "Syntax error in config file");
-                            for (short i = 0; i < t; ++i)
-                                free(trackconfig[i].keyword);
-                            cleanup(eventlist);
-                            fclose(conf);
-                            return EXIT_FAILURE;
-                        }
-                    }
-                    char *keyword = malloc(strlen(tokens[0]) + 1);
-                    strcpy(keyword, tokens[0]);
-                    trackconfig[t].keyword = keyword;
-                    trackconfig[t].offset = (int)strtol(tokens[1], NULL, 10);
-                    trackconfig[t].maxvol = (unsigned short)strtol(tokens[2], NULL, 10);
-                    trackconfig[t].minvel = (char)strtol(tokens[3], NULL, 10);
-                    if (++t == ntracks)
-                        break;
-                }
-
-                fclose(conf);
-            }
-        }
     }
 
     // Convert absolute ticks into relative ticks
@@ -513,7 +512,7 @@ int main(int argc, char **argv)
 }
 
 // Parses a track and merges it
-struct trackinfo parsetrack(FILE *stream, struct event *trackhead)
+struct trackinfo parsetrack(FILE *stream, struct event *trackhead, struct track *trackconfig)
 {
     unsigned long currenttick = 0;
     unsigned char runningstatus = 0;
@@ -531,21 +530,21 @@ struct trackinfo parsetrack(FILE *stream, struct event *trackhead)
         }
 
         if (newevent->type == NOTE_ON)
+        {
             ++info.notes;
+            ((struct note *)newevent->data)->track = trackconfig;
+        }
 
+        // Advance the track head until the end is reached or the next event absolute tick is greater than the new event
         while (trackhead->next != NULL && trackhead->next->tick <= newevent->tick)
             trackhead = trackhead->next;
 
-        // Append the new event
         if (trackhead->next == NULL)
-        {
+            // Append the new event
             newevent->next = NULL;
-        }
-        // Insert the new event
         else
-        {
+            // Insert the new event
             newevent->next = trackhead->next;
-        }
         trackhead->next = newevent;
         trackhead = newevent;
     }
@@ -597,9 +596,10 @@ struct event *getnextevent(FILE *stream, unsigned long *currenttick, char *runni
                     newevent->type = NOTE_ON;
                     newevent->tick = *currenttick;
 
-                    unsigned char *pitchdata = malloc(sizeof(char));
-                    *pitchdata = pitch;
-                    newevent->data = pitchdata;
+                    struct note *notedata = malloc(sizeof(struct note));
+                    notedata->pitch = pitch;
+                    notedata->velocity = velocity;
+                    newevent->data = notedata;
 
                     return newevent;
                 }
