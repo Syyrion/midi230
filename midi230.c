@@ -4,7 +4,7 @@
 
 const char *KEYWORD = "noteblock_harp";
 const int PITCH_OFFSET = 66;
-const unsigned short MAX_VOLUME = 200;
+const unsigned short MAX_VOLUME = 100;
 const char CUTOFF_VEL = 0;
 
 short readbig_i16(FILE *f)
@@ -84,6 +84,11 @@ void ignore(FILE *f, size_t size)
 {
     for (size_t i = 0; i < size; ++i)
         fgetc(f);
+}
+
+int scalevolume(char velocity, unsigned short maxvol)
+{
+    return velocity / 127.0 * maxvol;
 }
 
 void freeevents(struct event *item)
@@ -407,7 +412,7 @@ int main(int argc, char **argv)
                               "# Keyword, Base pitch, Max volume, Cutoff Velocity\n");
 
             for (short t = 0; t < ntracks; ++t)
-                fprintf(template, "%d, %s, %d, %d, %d\n", t + 1, KEYWORD, PITCH_OFFSET, MAX_VOLUME, CUTOFF_VEL);
+                fprintf(template, "%s, %d, %d, %d\n", KEYWORD, PITCH_OFFSET, MAX_VOLUME, CUTOFF_VEL);
 
             freeevents(eventlist);
             freetrackconfig(trackconfig, ntracks);
@@ -468,10 +473,7 @@ int main(int argc, char **argv)
         }
 
         const int MIDI_PITCH_TO_PITCH = -66;
-        // TODO: Remove 10000 bpm artifacts for note on events
         // TODO: Should assume 120 bpm
-        // TODO: Add volume
-        // TODO: Use config files
         // TODO: Merge consecutive padded tempo changes
         // Microseconds per midi quarter note
         unsigned int microsperquarter = 6000000;
@@ -484,50 +486,64 @@ int main(int argc, char **argv)
             {
                 // Find the event where there's a delay until the following event or last element is reached.
                 struct event *end = trackhead;
-
+                double microsdelta;
                 while (end->next != NULL)
                 {
+                    // Next event delay is non-zero.
                     if (end->next->tick > 0)
                     {
                         double microspertick = (double)microsperquarter / (double)division;
-                        double microsdelta = microspertick * end->next->tick;
+                        microsdelta = microspertick * end->next->tick;
                         double bpm = 6e7 / microsdelta;
-                        // If delay is negligable, keep advancing the end pointer.
-                        if (bpm <= 10000)
+                        if (bpm > 10000)
+                        {
+                            // If delay is negligable, keep advancing the end pointer.
+                            end = end->next;
+                            // Change the tempo if the event right after the negligable delay is a tempo change.
+                            if (end->type == TEMPO)
+                                microsperquarter = *(unsigned int *)trackhead->data;
+                        }
+                        else
+                            // Otherwise, stop and break out.
                             break;
                     }
-                    end = end->next;
+                    else
+                        end = end->next;
                 }
-
-                while (end->next != NULL && end->next->tick == 0)
-                    end = end->next;
 
                 // If the last element wasn't reached, write the speed if it's different from the last one.
-                if (end->next != NULL)
+                if (end->next != NULL && microsdelta != lastmicrosdelta)
                 {
-                    double microspertick = (double)microsperquarter / (double)division;
-                    double microsdelta = microspertick * end->next->tick;
-
+                    lastmicrosdelta = microsdelta;
                     double bpm = 6e7 / microsdelta;
-                    if (microsdelta != lastmicrosdelta)
-                    {
-                        lastmicrosdelta = microsdelta;
-                        double bpm = 6e7 / microsdelta;
-                        fprintf(out, "!speed@%.3f|", bpm);
-                    }
+                    fprintf(out, "!speed@%.3f|", bpm);
                 }
 
-                struct note *notedata = trackhead->data;
-
                 // Write at least one note.
+                struct note *notedata = trackhead->data;
+                int volume;
+                if ((volume = scalevolume(notedata->velocity, notedata->track->maxvol)) != lastvolume)
+                {
+                    lastvolume = volume;
+                    fprintf(out, "!volume@%d|", volume);
+                }
                 fprintf(out, "%s@%d|", notedata->track->keyword, notedata->pitch - notedata->track->offset);
 
                 // Write more notes until the end pointer is reached
                 while (trackhead != end)
                 {
                     trackhead = trackhead->next;
+                    notedata = trackhead->data;
                     if (trackhead->type == NOTE_ON)
-                        fprintf(out, "!combine|%s@%d|", notedata->track->keyword, notedata->pitch - notedata->track->offset);
+                    {
+                        fprintf(out, "!combine|");
+                        if ((volume = scalevolume(notedata->velocity, notedata->track->maxvol)) != lastvolume)
+                        {
+                            lastvolume = volume;
+                            fprintf(out, "!volume@%d|", volume);
+                        }
+                        fprintf(out, "%s@%d|", notedata->track->keyword, notedata->pitch - notedata->track->offset);
+                    }
                 }
 
                 // If the last element was reached break out of the loop.
