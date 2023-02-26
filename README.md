@@ -1,3 +1,69 @@
+A tool to convert MIDI files to [30 dollar website](https://thirtydollar.website) files.
+
+Compile the program using your favorite C compiler. This program is just a single C file.
+
+# Usage
+
+Convert a midi file using default settings:
+```
+midi230 example.mid
+```
+
+Specify the output filename:
+```
+midi230 -o out.moai example.mid
+```
+
+Show midi file info:
+```
+midi230 -i example.mid
+```
+
+## Output Configuration
+To customize the output, first create a template config file from a midi file:
+```
+midi230 -t example.mid
+```
+This will output a file called `example.conf` that will look something like this: 
+```bash
+# Available Tracks:
+
+# Track   Notes   Name
+#     1       0   example track 1
+#     2     433   example track 2
+#     3     488   example track 3
+#     4     506   example track 4
+#     5    1524   example track 5
+
+# Each line corresponds to each available track in order.
+# ! Every line must be fully filled to prevent unexpected behavior !
+# ! i.e. There must be something before and after every comma !
+# ! The last line must end with a newline character !
+
+# Keyword, Base pitch, Max volume, Cutoff Velocity
+noteblock_harp, 66, 100, 0
+noteblock_harp, 66, 100, 0
+noteblock_harp, 66, 100, 0
+noteblock_harp, 66, 100, 0
+noteblock_harp, 66, 100, 0
+```
+Here you can edit these values to configure the output behavior. Each track gets its own independent configuration from each line in the order that they appear.
+
+- Keyword
+  - The keyword that determines which sound is played for all notes. All keywords are provided in order in the Appendix.
+- Base Pitch
+  - The base pitch of sound from the website with no modifications as a midi pitch. For example, the noteblocks and an F#4 when not pitch-shifted, so the corresponding midi pitch would be 66. A table of midi pitches is provided in the Appendix.
+- Max Volume
+  - The maximum volume that a sound can take. A midi note with the max velocity of 127 will be played at this volume. (The maximum volume is 600.)
+- Cutoff Velocity
+  - A midi note's velocity must be greater that this value to be included in the output. Set to the maximum velocity of 127 to turn off a track.
+
+Once done editing the file, use it by passing it in as an argument:
+```
+midi230 -c example.conf example.mid
+```
+# Appendix
+
 ## Table of MIDI Pitches
 |*Octave*|C|C#|D|D#|E|F|F#|G|G#|A|A#|B
 |-|-|-|-|-|-|-|-|-|-|-|-|-
