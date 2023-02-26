@@ -50,15 +50,15 @@ noteblock_harp, 66, 100, 0
 Here you can edit these values to configure the output behavior. Each track gets its own independent configuration from each line in the order that they appear.
 
 - Keyword
-  - The keyword that determines which sound is played for all notes. All keywords are provided in order in the Appendix.
+  - The keyword that determines which sound is played for the corresponding track. All recognized keywords are provided in order in the Appendix.
 - Base Pitch
-  - The base pitch of sound from the website with no modifications as a midi pitch. For example, the noteblocks and an F#4 when not pitch-shifted, so the corresponding midi pitch would be 66. A table of midi pitches is provided in the Appendix.
+  - The base pitch of a sound from the website with no modifications as a midi pitch. For example, the noteblocks play an F#4 when not pitch-shifted, so the corresponding midi pitch would be 66. A table of midi pitches is provided in the Appendix.
 - Max Volume
   - The maximum volume that a sound can take. A midi note with the max velocity of 127 will be played at this volume. (The maximum volume is 600.)
 - Cutoff Velocity
-  - A midi note's velocity must be greater that this value to be included in the output. Set to the maximum velocity of 127 to turn off a track.
+  - A midi note's velocity must be greater that this value to be included in the output. Used to exclude notes that are silent or not loud enough to hear. Set to the maximum velocity of 127 to exclude all notes to turn off a track.
 
-Once done editing the file, use it by passing it in as an argument:
+Once done editing the config file, use it by passing it in as an argument:
 ```
 midi230 -c example.conf example.mid
 ```
