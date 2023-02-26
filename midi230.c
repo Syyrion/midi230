@@ -484,6 +484,7 @@ int main(int argc, char **argv)
                 // Find the event where there's a delay until the following event or last element is reached.
                 struct event *end = trackhead;
                 double microsdelta;
+                double bpm;
                 while (end->next != NULL)
                 {
                     // Next event delay is non-zero.
@@ -491,14 +492,14 @@ int main(int argc, char **argv)
                     {
                         double microspertick = (double)microsperquarter / (double)division;
                         microsdelta = microspertick * end->next->tick;
-                        double bpm = 6e7 / microsdelta;
+                        bpm = 6e7 / microsdelta;
                         if (bpm > 10000)
                         {
                             // If delay is negligable, keep advancing the end pointer.
                             end = end->next;
                             // Change the tempo if the event right after the negligable delay is a tempo change.
                             if (end->type == TEMPO)
-                                microsperquarter = *(unsigned int *)trackhead->data;
+                                microsperquarter = *(unsigned int *)end->data;
                         }
                         else
                             // Otherwise, stop and break out.
@@ -512,7 +513,6 @@ int main(int argc, char **argv)
                 if (end->next != NULL && microsdelta != lastmicrosdelta)
                 {
                     lastmicrosdelta = microsdelta;
-                    double bpm = 6e7 / microsdelta;
                     fprintf(out, "!speed@%.3f|", bpm);
                 }
 
