@@ -2,10 +2,20 @@
 #include <stdio.h>
 #include <string.h>
 
+/*
+    todo: Merge consecutive tempo changes
+    todo: Display program/instrument names
+    todo: Tracks can have up to 16 individual channels with different instruments
+    todo: Handle extremely slow tempos by chaining silence
+    todo: Some very rare edge cases still exist apparently
+    todo: Utilize individual note volumes
+*/
+
 char *KEYWORD = "noteblock_harp";
 const int PITCH_OFFSET = 66;
 const unsigned short MAX_VOLUME = 100;
 const char CUTOFF_VEL = 0;
+char *PROGRAM_NAMES[];
 
 short readbig_i16(FILE *f)
 {
@@ -34,7 +44,8 @@ enum eventtype
     NOTE_ON,
     TEMPO,
     START,
-    TRACK_NAME
+    TRACK_NAME,
+    PROGRAM
 };
 
 struct event
@@ -64,6 +75,7 @@ struct trackinfo
 {
     size_t notes;
     char *name;
+    char *program;
 };
 
 unsigned int readvarlen(FILE *f)
@@ -114,7 +126,8 @@ void freetrackconfig(struct track *trackconfig, short ntracks)
 void freetrackinfo(struct trackinfo info[], short ntracks)
 {
     for (short t = 0; t < ntracks; ++t)
-        free(info[t].name);
+        if (info[t].name != NULL)
+            free(info[t].name);
 }
 
 void printhelptext(void)
@@ -349,12 +362,10 @@ int main(int argc, char **argv)
             printf("Format: %d\n", format);
             printf("Number of tracks: %d\n", ntracks);
             printf("Ticks/quarter note: %d\n\n", division);
-            printf("Track   Notes   Name\n");
+            printf("Track   Notes   Program                              Name\n");
             for (short t = 0; t < ntracks; ++t)
-                printf("%5d %7lu   %s\n", t + 1, info[t].notes, info[t].name ? info[t].name : "");
+                printf("%5d %7lu   %-34s   %s\n", t + 1, info[t].notes, info[t].program ? info[t].program : "", info[t].name ? info[t].name : "");
 
-            for (short t = 0; t < ntracks; ++t)
-                free(info[t].name);
             freeevents(eventlist);
             freetrackconfig(trackconfig, ntracks);
             freetrackinfo(info, ntracks);
@@ -399,9 +410,9 @@ int main(int argc, char **argv)
             }
 
             fprintf(template, "# Available Tracks:\n\n");
-            fprintf(template, "# Track   Notes   Name\n");
+            fprintf(template, "# Track   Notes   Program                              Name\n");
             for (short t = 0; t < ntracks; ++t)
-                fprintf(template, "# %5d %7lu   %s\n", t + 1, info[t].notes, info[t].name ? info[t].name : "");
+                fprintf(template, "# %5d %7lu   %-34s   %s\n", t + 1, info[t].notes, info[t].program ? info[t].program : "", info[t].name ? info[t].name : "");
 
             fprintf(template, "\n"
                               "# Each line corresponds to each available track in order.\n"
@@ -513,7 +524,7 @@ int main(int argc, char **argv)
                 if (end->next != NULL && microsdelta != lastmicrosdelta)
                 {
                     lastmicrosdelta = microsdelta;
-                    fprintf(out, "!speed@%.3f|", bpm);
+                    fprintf(out, "!speed@%.3f|", (int)(bpm * 100 + 0.5) / 100.0);
                 }
 
                 // Write at least one note.
@@ -564,7 +575,7 @@ int main(int argc, char **argv)
 
                     // Ignore that delay if it is negligable
                     if (bpm <= 10000)
-                        fprintf(out, "!speed@%.4f|_pause|", bpm);
+                        fprintf(out, "!speed@%.4f|_pause|", (int)(bpm * 100 + 0.5) / 100.0);
                 }
             }
             trackhead = trackhead->next;
@@ -584,7 +595,7 @@ struct trackinfo parsetrack(FILE *stream, struct event *trackhead, struct track 
 {
     unsigned long currenttick = 0;
     unsigned char runningstatus = 0;
-    struct trackinfo info = {0, NULL};
+    struct trackinfo info = {0, NULL, NULL};
 
     struct event *newevent;
     while ((newevent = getnextevent(stream, &currenttick, &runningstatus, trackconfig->minvel, error)) != NULL)
@@ -593,6 +604,14 @@ struct trackinfo parsetrack(FILE *stream, struct event *trackhead, struct track 
         {
             if (info.name == NULL)
                 info.name = (char *)newevent->data;
+            free(newevent);
+            continue;
+        }
+
+        if (newevent->type == PROGRAM)
+        {
+            if (info.program == NULL)
+                info.program = PROGRAM_NAMES[newevent->tick];
             free(newevent);
             continue;
         }
@@ -616,13 +635,6 @@ struct trackinfo parsetrack(FILE *stream, struct event *trackhead, struct track 
         trackhead->next = newevent;
         trackhead = newevent;
     }
-
-    if (info.name == NULL)
-    {
-        info.name = malloc(1);
-        *info.name = '\0';
-    }
-
     return info;
 }
 
@@ -639,11 +651,11 @@ struct event *getnextevent(FILE *stream, unsigned long *currenttick, char *runni
         // midi event
         default:
         {
-            // New status
             if (status & 0x80)
+                // New status
                 *runningstatus = status;
-            // There's no new status, rewind stream by one byte.
             else
+                // There's no new status, rewind stream by one byte.
                 fseek(stream, -1, SEEK_CUR);
 
             unsigned char highnybble = *runningstatus & 0xF0;
@@ -674,13 +686,22 @@ struct event *getnextevent(FILE *stream, unsigned long *currenttick, char *runni
             }
             break;
 
+            // Program change
+            case 0xC0:
+            {
+                struct event *newevent = malloc(sizeof(struct event));
+                newevent->type = PROGRAM;
+                newevent->tick = fgetc(stream);
+                printf("%lu\n", newevent->tick);
+                return newevent;
+            }
+
             // Ignore other events
             case 0x80:
             case 0xA0:
             case 0xB0:
             case 0xE0:
                 fgetc(stream);
-            case 0xC0:
             case 0xD0:
                 fgetc(stream);
                 break;
@@ -803,3 +824,134 @@ char *getfname(char *path)
 
     return preserve;
 }
+
+char *PROGRAM_NAMES[] = {
+    "Acoustic Grand Piano",
+    "Bright Acoustic Piano",
+    "Electric Grand Piano",
+    "Honky-tonk Piano",
+    "Electric Piano 1 (Rhodes Piano)",
+    "Electric Piano 2 (Chorused Piano)",
+    "Harpsichord",
+    "Clavinet",
+    "Celesta",
+    "Glockenspiel",
+    "Music Box",
+    "Vibraphone",
+    "Marimba",
+    "Xylophone",
+    "Tubular Bells",
+    "Dulcimer (Santur)",
+    "Drawbar Organ (Hammond)",
+    "Percussive Organ",
+    "Rock Organ",
+    "Church Organ",
+    "Reed Organ",
+    "Accordion (French)",
+    "Harmonica",
+    "Tango Accordion (Band neon)",
+    "Acoustic Guitar (nylon)",
+    "Acoustic Guitar (steel)",
+    "Electric Guitar (jazz)",
+    "Electric Guitar (clean)",
+    "Electric Guitar (muted)",
+    "Overdriven Guitar",
+    "Distortion Guitar",
+    "Guitar harmonics",
+    "Acoustic Bass",
+    "Electric Bass (fingered)",
+    "Electric Bass (picked)",
+    "Fretless Bass",
+    "Slap Bass 1",
+    "Slap Bass 2",
+    "Synth Bass 1",
+    "Synth Bass 2",
+    "Violin",
+    "Viola",
+    "Cello",
+    "Contrabass",
+    "Tremolo Strings",
+    "Pizzicato Strings",
+    "Orchestral Harp",
+    "Timpani",
+    "String Ensemble 1 (strings)",
+    "String Ensemble 2 (slow strings)",
+    "SynthStrings 1",
+    "SynthStrings 2",
+    "Choir Aahs",
+    "Voice Oohs",
+    "Synth Voice",
+    "Orchestra Hit",
+    "Trumpet",
+    "Trombone",
+    "Tuba",
+    "Muted Trumpet",
+    "French Horn",
+    "Brass Section",
+    "SynthBrass 1",
+    "SynthBrass 2",
+    "Soprano Sax",
+    "Alto Sax",
+    "Tenor Sax",
+    "Baritone Sax",
+    "Oboe",
+    "English Horn",
+    "Bassoon",
+    "Clarinet",
+    "Piccolo",
+    "Flute",
+    "Recorder",
+    "Pan Flute",
+    "Blown Bottle",
+    "Shakuhachi",
+    "Whistle",
+    "Ocarina",
+    "Lead 1 (square wave)",
+    "Lead 2 (sawtooth wave)",
+    "Lead 3 (calliope)",
+    "Lead 4 (chiffer)",
+    "Lead 5 (charang)",
+    "Lead 6 (voice solo)",
+    "Lead 7 (fifths)",
+    "Lead 8 (bass + lead)",
+    "Pad 1 (new age Fantasia)",
+    "Pad 2 (warm)",
+    "Pad 3 (polysynth)",
+    "Pad 4 (choir space voice)",
+    "Pad 5 (bowed glass)",
+    "Pad 6 (metallic pro)",
+    "Pad 7 (halo)",
+    "Pad 8 (sweep)",
+    "FX 1 (rain)",
+    "FX 2 (soundtrack)",
+    "FX 3 (crystal)",
+    "FX 4 (atmosphere)",
+    "FX 5 (brightness)",
+    "FX 6 (goblins)",
+    "FX 7 (echoes, drops)",
+    "FX 8 (sci-fi, star theme)",
+    "Sitar",
+    "Banjo",
+    "Shamisen",
+    "Koto",
+    "Kalimba",
+    "Bag pipe",
+    "Fiddle",
+    "Shanai",
+    "Tinkle Bell",
+    "Agogo",
+    "Steel Drums",
+    "Woodblock",
+    "Taiko Drum",
+    "Melodic Tom",
+    "Synth Drum",
+    "Reverse Cymbal",
+    "Guitar Fret Noise",
+    "Breath Noise",
+    "Seashore",
+    "Bird Tweet",
+    "Telephone Ring",
+    "Helicopter",
+    "Applause",
+    "Gunshot",
+};
