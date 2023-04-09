@@ -471,44 +471,26 @@ int main(int argc, char **argv)
         }
     }
 
-    printf("F\n");
-    fflush(stdout);
-    {
-        struct event *trackhead = &placeholderevent;
-        int c = 0;
-        while (trackhead->next)
-        {
-            struct event *next = trackhead->next;
-            if (next->type == NOTE_ON)
-            {
-                struct note *notedata = next->data;
-                if (notedata->velocity <= notedata->channel->minvel)
-                {
-                    printf("rm: %d\n", c);
-                }
-            }
-            ++c;
-            trackhead = trackhead->next;
-        }
-        printf("Total: %d\n", c);
-    }
-    printf("D\n");
-    fflush(stdout);
-
-    return EXIT_SUCCESS;
-
     // Convert absolute ticks into relative ticks
+    // Prune silent notes
     {
         unsigned long currenttick = 0;
-        struct event *trackhead = eventlist;
-        if (trackhead != NULL)
-            do
+        struct event *trackhead = &placeholderevent;
+        while (trackhead->next)
+        {
+            if (trackhead->next->type == NOTE_ON && ((struct note *)trackhead->next->data)->velocity <= ((struct note *)trackhead->next->data)->channel->minvel)
             {
-                unsigned long temp = trackhead->tick;
-                trackhead->tick -= currenttick;
-                currenttick = temp;
-                trackhead = trackhead->next;
-            } while (trackhead != NULL);
+                struct event *temp = trackhead->next;
+                trackhead->next = temp->next;
+                free(temp->data);
+                free(temp);
+                continue;
+            }
+            unsigned long temp = trackhead->next->tick;
+            trackhead->next->tick -= currenttick;
+            currenttick = temp;
+            trackhead = trackhead->next;
+        }
     }
 
     // Create the output file
