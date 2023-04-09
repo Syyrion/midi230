@@ -374,8 +374,9 @@ int main(int argc, char **argv)
                               "# ! i.e. There must be something before and after every comma !\n"
                               "# ! The last line must end with a newline character !\n"
                               "\n"
-                              "# Keyword, Base pitch, Max volume, Cutoff Velocity    # <Ch#>    Notes     Program\n");
+                              "# Keyword, Base pitch, Max volume, Cutoff Velocity    # No.    <Ch#>    Notes     Program\n");
 
+            int n = 1;
             for (short t = 0; t < ntracks; ++t)
             {
                 if (tracks[t].name)
@@ -389,7 +390,7 @@ int main(int argc, char **argv)
                     if (channel)
                     {
                         fprintf(template, "%s, %d, %d, %d    ", KEYWORD, PITCH_OFFSET, MAX_VOLUME, CUTOFF_VEL);
-                        fprintf(template, "# <Ch%d>%s    ", c, c < 10 ? " " : "");
+                        fprintf(template, "# %d    <Ch%d>%s    ", n++, c, c < 10 ? " " : "");
                         fprintf(template, "%5lu    %s\n", channel->notes, channel->program ? channel->program : "");
                     }
                 }
