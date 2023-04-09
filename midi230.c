@@ -4,12 +4,11 @@
 
 /*
     todo: Merge consecutive tempo changes
-    todo: Display program/instrument names
-    todo: Tracks can have up to 16 individual channels with different instruments
     todo: Handle extremely slow tempos by chaining silence
     todo: Some very rare edge cases still exist apparently
-    todo: Utilize individual note volumes
 */
+
+#define CHANNELS_PER_TRACK 16
 
 char *KEYWORD = "noteblock_harp";
 const int PITCH_OFFSET = 66;
@@ -41,11 +40,9 @@ unsigned int readbig_ui32(FILE *f)
 
 enum eventtype
 {
-    NOTE_ON,
-    TEMPO,
     START,
-    TRACK_NAME,
-    PROGRAM
+    NOTE_ON,
+    TEMPO
 };
 
 struct event
@@ -56,26 +53,42 @@ struct event
     void *data;
 };
 
-struct track
+struct channel
 {
+    // Channel info
+    size_t notes;
+    char *program;
+
+    // Channel settings
     char *keyword;
     int offset;
     unsigned short maxvol;
     char minvel;
 };
 
-struct note
+struct channel *newchannel()
 {
-    struct track *track;
-    char velocity;
-    int pitch;
+    struct channel *newinst = malloc(sizeof(struct channel));
+    newinst->notes = 0;
+    newinst->program = NULL;
+    newinst->keyword = KEYWORD;
+    newinst->offset = PITCH_OFFSET;
+    newinst->maxvol = MAX_VOLUME;
+    newinst->minvel = CUTOFF_VEL;
+    return newinst;
+}
+
+struct track
+{
+    struct channel *channels[CHANNELS_PER_TRACK];
+    char *name;
 };
 
-struct trackinfo
+struct note
 {
-    size_t notes;
-    char *name;
-    char *program;
+    struct channel *channel;
+    char velocity;
+    int pitch;
 };
 
 unsigned int readvarlen(FILE *f)
@@ -115,19 +128,17 @@ void freeevents(struct event *item)
         } while (item != NULL);
 }
 
-void freetrackconfig(struct track *trackconfig, short ntracks)
-{
-    for (short i = 0; i < ntracks; ++i)
-        if (trackconfig[i].keyword != KEYWORD)
-            free(trackconfig[i].keyword);
-    free(trackconfig);
-}
-
-void freetrackinfo(struct trackinfo info[], short ntracks)
+void freetracks(struct track tracks[], short ntracks)
 {
     for (short t = 0; t < ntracks; ++t)
-        if (info[t].name != NULL)
-            free(info[t].name);
+    {
+        for (short c = 0; c < CHANNELS_PER_TRACK; ++c)
+            if (tracks[t].channels[c])
+                free(tracks[t].channels[c]);
+        if (tracks[t].name)
+            free(tracks[t].name);
+    }
+    free(tracks);
 }
 
 void printhelptext(void)
@@ -147,8 +158,7 @@ void printhelptext(void)
     exit(EXIT_SUCCESS);
 }
 
-struct trackinfo parsetrack(FILE *, struct event *, struct track *, char *);
-struct event *getnextevent(FILE *, unsigned long *, char *, char, char *);
+void parsetrack(FILE *, struct event *, struct track *, char *);
 char *getfname(char *);
 
 int main(int argc, char **argv)
@@ -214,9 +224,10 @@ int main(int argc, char **argv)
 
     // Ticks per quarter note
     short division;
-
+    // Number of tracks
     short ntracks;
-    struct track *trackconfig;
+    // Contains track info and settings
+    struct track *tracks;
 
     // Read the input file
     {
@@ -256,73 +267,10 @@ int main(int argc, char **argv)
             }
         }
 
-        // Create track configuration
-        trackconfig = malloc(sizeof(struct track) * ntracks);
-
-        // Set default values
-        for (short i = 0; i < ntracks; ++i)
-        {
-            trackconfig[i].keyword = KEYWORD;
-            trackconfig[i].offset = PITCH_OFFSET;
-            trackconfig[i].maxvol = MAX_VOLUME;
-            trackconfig[i].minvel = CUTOFF_VEL;
-        }
-
-        // Read config file
-        if (configfname)
-        {
-            FILE *conf = fopen(configfname, "r");
-
-            if (conf == NULL)
-            {
-                const char fmt[] = "Unable to open config file '%s'";
-                char err[strlen(configfname) + sizeof(fmt)];
-                snprintf(err, sizeof(err), fmt, configfname);
-                perror(err);
-                freetrackconfig(trackconfig, ntracks);
-                fclose(midi);
-                return EXIT_FAILURE;
-            }
-
-            short t = 0;
-            char line[128];
-            while (fgets(line, sizeof(line), conf))
-            {
-                char *s = line;
-                while (*s == ' ' || *s == '\t' || *s == '\r')
-                    ++s;
-
-                if (*s == '#' || *s == '\n')
-                    continue;
-
-                char *tokens[4];
-                for (int i = 0; i < 4; ++i)
-                {
-                    tokens[i] = strtok(i ? NULL : s, ", \t\r\n");
-                    if (tokens[i] == NULL)
-                    {
-                        fprintf(stderr, "Syntax error in config file\n");
-                        fclose(conf);
-                        freetrackconfig(trackconfig, ntracks);
-                        fclose(midi);
-                        return EXIT_FAILURE;
-                    }
-                }
-                char *keyword = malloc(strlen(tokens[0]) + 1);
-                strcpy(keyword, tokens[0]);
-                trackconfig[t].keyword = keyword;
-                trackconfig[t].offset = (int)strtol(tokens[1], NULL, 10);
-                trackconfig[t].maxvol = (unsigned short)strtol(tokens[2], NULL, 10);
-                trackconfig[t].minvel = (char)strtol(tokens[3], NULL, 10);
-                if (++t == ntracks)
-                    break;
-            }
-
-            fclose(conf);
-        }
+        // Create track/channel configuration
+        tracks = calloc(ntracks, sizeof(struct track));
 
         // Get and merge tracks
-        struct trackinfo info[ntracks];
         {
             short t = 0;
             while (t < ntracks)
@@ -330,17 +278,17 @@ int main(int argc, char **argv)
                 char chunktype[5] = {'\0'};
                 fread(chunktype, 1, 4, midi);
                 unsigned int size = readbig_ui32(midi);
+                // Error flag
                 char error = 0;
                 // Parse if midi track chunk is found
                 if (strcmp(chunktype, "MTrk") == 0)
                 {
-                    info[t++] = parsetrack(midi, &placeholderevent, trackconfig + t, &error);
+                    parsetrack(midi, &placeholderevent, &tracks[t++], &error);
                     if (error)
                     {
                         fprintf(stderr, "Input file is corrupted\n");
                         freeevents(eventlist);
-                        freetrackconfig(trackconfig, ntracks);
-                        freetrackinfo(info, t);
+                        freetracks(tracks, ntracks);
                         fclose(midi);
                         return EXIT_FAILURE;
                     }
@@ -355,24 +303,38 @@ int main(int argc, char **argv)
         // Done reading
         fclose(midi);
 
-        // Show midi info
+        // * Show midi info
         if (showinfo)
         {
             printf("MIDI File Info:\n\n");
             printf("Format: %d\n", format);
             printf("Number of tracks: %d\n", ntracks);
             printf("Ticks/quarter note: %d\n\n", division);
-            printf("Track   Notes   Program                              Name\n");
+            printf("    <Ch#>     Notes    Program\n");
             for (short t = 0; t < ntracks; ++t)
-                printf("%5d %7lu   %-34s   %s\n", t + 1, info[t].notes, info[t].program ? info[t].program : "", info[t].name ? info[t].name : "");
+            {
+                if (tracks[t].name)
+                    printf("<%s>\n", tracks[t].name);
+                else
+                    printf("<Trk%d>\n", t + 1);
+
+                for (short c = 0; c < CHANNELS_PER_TRACK; ++c)
+                {
+                    struct channel *channel = tracks[t].channels[c];
+                    if (channel)
+                    {
+                        printf("    <Ch%d>%s    ", c, c < 10 ? " " : "");
+                        printf("%5lu    %s\n", channel->notes, channel->program ? channel->program : "");
+                    }
+                }
+            }
 
             freeevents(eventlist);
-            freetrackconfig(trackconfig, ntracks);
-            freetrackinfo(info, ntracks);
+            freetracks(tracks, ntracks);
             return EXIT_SUCCESS;
         }
 
-        // Create template
+        // * Create template
         if (createtemplate)
         {
             FILE *template;
@@ -392,8 +354,7 @@ int main(int argc, char **argv)
                     snprintf(err, sizeof(err), fmt, path);
                     perror(err);
                     freeevents(eventlist);
-                    freetrackconfig(trackconfig, ntracks);
-                    freetrackinfo(info, ntracks);
+                    freetracks(tracks, ntracks);
                     return EXIT_FAILURE;
                 }
             }
@@ -404,36 +365,137 @@ int main(int argc, char **argv)
                 snprintf(err, sizeof(err), fmt, outfname);
                 perror(err);
                 freeevents(eventlist);
-                freetrackconfig(trackconfig, ntracks);
-                freetrackinfo(info, ntracks);
+                freetracks(tracks, ntracks);
                 return EXIT_FAILURE;
             }
 
-            fprintf(template, "# Available Tracks:\n\n");
-            fprintf(template, "# Track   Notes   Program                              Name\n");
-            for (short t = 0; t < ntracks; ++t)
-                fprintf(template, "# %5d %7lu   %-34s   %s\n", t + 1, info[t].notes, info[t].program ? info[t].program : "", info[t].name ? info[t].name : "");
-
-            fprintf(template, "\n"
-                              "# Each line corresponds to each available track in order.\n"
+            fprintf(template, "# Each line corresponds to each available track in order.\n"
                               "# ! Every line must be fully filled to prevent unexpected behavior !\n"
                               "# ! i.e. There must be something before and after every comma !\n"
                               "# ! The last line must end with a newline character !\n"
                               "\n"
-                              "# Keyword, Base pitch, Max volume, Cutoff Velocity\n");
+                              "# Keyword, Base pitch, Max volume, Cutoff Velocity    # <Ch#>    Notes     Program\n");
 
             for (short t = 0; t < ntracks; ++t)
-                fprintf(template, "%s, %d, %d, %d\n", KEYWORD, PITCH_OFFSET, MAX_VOLUME, CUTOFF_VEL);
+            {
+                if (tracks[t].name)
+                    fprintf(template, "# <%s>\n", tracks[t].name);
+                else
+                    fprintf(template, "# <Trk%d>\n", t + 1);
+
+                for (short c = 0; c < CHANNELS_PER_TRACK; ++c)
+                {
+                    struct channel *channel = tracks[t].channels[c];
+                    if (channel)
+                    {
+                        fprintf(template, "%s, %d, %d, %d    ", KEYWORD, PITCH_OFFSET, MAX_VOLUME, CUTOFF_VEL);
+                        fprintf(template, "# <Ch%d>%s    ", c, c < 10 ? " " : "");
+                        fprintf(template, "%5lu    %s\n", channel->notes, channel->program ? channel->program : "");
+                    }
+                }
+            }
 
             freeevents(eventlist);
-            freetrackconfig(trackconfig, ntracks);
-            freetrackinfo(info, ntracks);
+            freetracks(tracks, ntracks);
             fclose(template);
             return EXIT_SUCCESS;
         }
 
-        freetrackinfo(info, ntracks);
+        // Read config file
+        if (configfname)
+        {
+            FILE *conf = fopen(configfname, "r");
+
+            if (conf == NULL)
+            {
+                const char fmt[] = "Unable to open config file '%s'";
+                char err[strlen(configfname) + sizeof(fmt)];
+                snprintf(err, sizeof(err), fmt, configfname);
+                perror(err);
+                freeevents(eventlist);
+                freetracks(tracks, ntracks);
+                return EXIT_FAILURE;
+            }
+
+            for (short t = 0; t < ntracks; ++t)
+                for (short c = 0; c < CHANNELS_PER_TRACK; ++c)
+                {
+                    struct channel *channel = tracks[t].channels[c];
+                    if (!channel)
+                        continue;
+
+                    char line[128];
+                    char *in;
+
+                    while (1)
+                    {
+                        // Exit all loops if there's nothing more to read
+                        if (!(in = fgets(line, sizeof(line), conf)))
+                            goto exit;
+                        // Skip whitespace
+                        while (*in == ' ' || *in == '\t' || *in == '\r')
+                            ++in;
+                        // Exit if not newline or comment
+                        if (!(*in == '#' || *in == '\n'))
+                            break;
+                    }
+
+                    char *out = in;
+                    while (!(*out == '#' || *out == '\n'))
+                        ++out;
+                    *out = '\0';
+
+                    // Read 4 comma separated tokens
+                    char *tokens[4];
+                    for (int i = 0; i < 4; ++i)
+                    {
+                        tokens[i] = strtok(i ? NULL : in, ", \t\r");
+                        if (tokens[i] == NULL)
+                        {
+                            fprintf(stderr, "Syntax error in config file\n");
+                            freeevents(eventlist);
+                            freetracks(tracks, ntracks);
+                            fclose(conf);
+                            return EXIT_FAILURE;
+                        }
+                    }
+                    char *keyword = malloc(strlen(tokens[0]) + 1);
+                    strcpy(keyword, tokens[0]);
+                    channel->keyword = keyword;
+                    channel->offset = (int)strtol(tokens[1], NULL, 10);
+                    channel->maxvol = (unsigned short)strtol(tokens[2], NULL, 10);
+                    channel->minvel = (char)strtol(tokens[3], NULL, 10);
+                }
+        exit:
+            fclose(conf);
+        }
     }
+
+    printf("F\n");
+    fflush(stdout);
+    {
+        struct event *trackhead = &placeholderevent;
+        int c = 0;
+        while (trackhead->next)
+        {
+            struct event *next = trackhead->next;
+            if (next->type == NOTE_ON)
+            {
+                struct note *notedata = next->data;
+                if (notedata->velocity <= notedata->channel->minvel)
+                {
+                    printf("rm: %d\n", c);
+                }
+            }
+            ++c;
+            trackhead = trackhead->next;
+        }
+        printf("Total: %d\n", c);
+    }
+    printf("D\n");
+    fflush(stdout);
+
+    return EXIT_SUCCESS;
 
     // Convert absolute ticks into relative ticks
     {
@@ -468,7 +530,7 @@ int main(int argc, char **argv)
                 snprintf(err, sizeof(err), fmt, path);
                 perror(err);
                 freeevents(eventlist);
-                freetrackconfig(trackconfig, ntracks);
+                freetracks(tracks, ntracks);
                 return EXIT_FAILURE;
             }
         }
@@ -479,14 +541,13 @@ int main(int argc, char **argv)
             snprintf(err, sizeof(err), fmt, outfname);
             perror(err);
             freeevents(eventlist);
-            freetrackconfig(trackconfig, ntracks);
+            freetracks(tracks, ntracks);
             return EXIT_FAILURE;
         }
 
         // Microseconds per midi quarter note
         unsigned int microsperquarter = 5e5;
         double lastmicrosdelta = 0;
-        int lastvolume = -1;
         struct event *trackhead = eventlist;
         while (1)
         {
@@ -529,28 +590,23 @@ int main(int argc, char **argv)
 
                 // Write at least one note.
                 struct note *notedata = trackhead->data;
-                int volume;
-                if ((volume = scalevolume(notedata->velocity, notedata->track->maxvol)) != lastvolume)
-                {
-                    lastvolume = volume;
-                    fprintf(out, "!volume@%d|", volume);
-                }
-                fprintf(out, "%s@%d|", notedata->track->keyword, notedata->pitch - notedata->track->offset);
+                fprintf(out, "%s@%d%%%d|",
+                        notedata->channel->keyword,
+                        notedata->pitch - notedata->channel->offset,
+                        scalevolume(notedata->velocity, notedata->channel->maxvol));
 
                 // Write more notes until the end pointer is reached
                 while (trackhead != end)
                 {
                     trackhead = trackhead->next;
-                    notedata = trackhead->data;
                     if (trackhead->type == NOTE_ON)
                     {
+                        notedata = trackhead->data;
                         fprintf(out, "!combine|");
-                        if ((volume = scalevolume(notedata->velocity, notedata->track->maxvol)) != lastvolume)
-                        {
-                            lastvolume = volume;
-                            fprintf(out, "!volume@%d|", volume);
-                        }
-                        fprintf(out, "%s@%d|", notedata->track->keyword, notedata->pitch - notedata->track->offset);
+                        fprintf(out, "%s@%d%%%d|",
+                                notedata->channel->keyword,
+                                notedata->pitch - notedata->channel->offset,
+                                scalevolume(notedata->velocity, notedata->channel->maxvol));
                     }
                 }
 
@@ -585,43 +641,22 @@ int main(int argc, char **argv)
     }
 
     freeevents(eventlist);
-    freetrackconfig(trackconfig, ntracks);
+    freetracks(tracks, ntracks);
 
     return 0;
 }
 
+struct event *getnextevent(FILE *, unsigned long *, unsigned char *, struct track *track, char *);
+
 // Parses a track and merges it
-struct trackinfo parsetrack(FILE *stream, struct event *trackhead, struct track *trackconfig, char *error)
+void parsetrack(FILE *stream, struct event *trackhead, struct track *track, char *error)
 {
     unsigned long currenttick = 0;
     unsigned char runningstatus = 0;
-    struct trackinfo info = {0, NULL, NULL};
 
     struct event *newevent;
-    while ((newevent = getnextevent(stream, &currenttick, &runningstatus, trackconfig->minvel, error)) != NULL)
+    while ((newevent = getnextevent(stream, &currenttick, &runningstatus, track, error)) != NULL)
     {
-        if (newevent->type == TRACK_NAME)
-        {
-            if (info.name == NULL)
-                info.name = (char *)newevent->data;
-            free(newevent);
-            continue;
-        }
-
-        if (newevent->type == PROGRAM)
-        {
-            if (info.program == NULL)
-                info.program = PROGRAM_NAMES[newevent->tick];
-            free(newevent);
-            continue;
-        }
-
-        if (newevent->type == NOTE_ON)
-        {
-            ++info.notes;
-            ((struct note *)newevent->data)->track = trackconfig;
-        }
-
         // Advance the track head until the end is reached or the next event absolute tick is greater than the new event
         while (trackhead->next != NULL && trackhead->next->tick <= newevent->tick)
             trackhead = trackhead->next;
@@ -635,11 +670,10 @@ struct trackinfo parsetrack(FILE *stream, struct event *trackhead, struct track 
         trackhead->next = newevent;
         trackhead = newevent;
     }
-    return info;
 }
 
 // Gets the next midi/sysex/meta event
-struct event *getnextevent(FILE *stream, unsigned long *currenttick, char *runningstatus, char minvel, char *error)
+struct event *getnextevent(FILE *stream, unsigned long *currenttick, unsigned char *runningstatus, struct track *track, char *error)
 {
     while (1)
     {
@@ -663,37 +697,40 @@ struct event *getnextevent(FILE *stream, unsigned long *currenttick, char *runni
 
             switch (highnybble)
             {
-            // Create note on event
+            // * Create note on event
             case 0x90:
             {
                 int pitch = fgetc(stream);
                 char velocity = fgetc(stream);
-                // Only create a note if it is audable
-                if (velocity > minvel)
-                {
-                    struct event *newevent = malloc(sizeof(struct event));
+                struct event *newevent = malloc(sizeof(struct event));
 
-                    newevent->type = NOTE_ON;
-                    newevent->tick = *currenttick;
+                newevent->type = NOTE_ON;
+                newevent->tick = *currenttick;
 
-                    struct note *notedata = malloc(sizeof(struct note));
-                    notedata->pitch = pitch;
-                    notedata->velocity = velocity;
-                    newevent->data = notedata;
+                struct note *notedata = malloc(sizeof(struct note));
+                notedata->pitch = pitch;
+                notedata->velocity = velocity;
 
-                    return newevent;
-                }
+                struct channel *channel = track->channels[lownybble];
+                if (!channel)
+                    channel = track->channels[lownybble] = newchannel();
+                ++(channel->notes);
+                notedata->channel = channel;
+
+                newevent->data = notedata;
+                return newevent;
             }
             break;
 
-            // Program change
+            // * Program change
             case 0xC0:
             {
-                struct event *newevent = malloc(sizeof(struct event));
-                newevent->type = PROGRAM;
-                newevent->tick = fgetc(stream);
-                printf("%lu\n", newevent->tick);
-                return newevent;
+                struct channel *channel = track->channels[lownybble];
+                if (!channel)
+                    channel = track->channels[lownybble] = newchannel();
+                if (!channel->program)
+                    channel->program = PROGRAM_NAMES[fgetc(stream)];
+                break;
             }
 
             // Ignore other events
@@ -726,6 +763,7 @@ struct event *getnextevent(FILE *stream, unsigned long *currenttick, char *runni
 
             default:
             {
+                // File is corrupted
                 *error = 1;
                 return NULL;
             }
@@ -757,7 +795,7 @@ struct event *getnextevent(FILE *stream, unsigned long *currenttick, char *runni
             case 0x2F:
                 return NULL;
 
-            // Create tempo event
+            // * Create tempo event
             case 0x51:
             {
                 struct event *newevent = malloc(sizeof(struct event));
@@ -773,20 +811,19 @@ struct event *getnextevent(FILE *stream, unsigned long *currenttick, char *runni
                 return newevent;
             }
 
-            // Get track name
+            // * Get track name
             case 0x03:
             {
-                struct event *newevent = malloc(sizeof(struct event));
-
-                newevent->type = TRACK_NAME;
+                if (track->name)
+                    break;
 
                 char *name = malloc(length + 1);
                 for (int i = 0; i < length; ++i)
                     name[i] = fgetc(stream);
                 name[length] = '\0';
-                newevent->data = name;
+                track->name = name;
 
-                return newevent;
+                break;
             }
 
             // Ignore other meta events

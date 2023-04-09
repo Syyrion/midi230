@@ -25,38 +25,36 @@ To customize the output, first create a template config file from a midi file:
 midi230 -t example.mid
 ```
 This will output a file called `example.conf` that will look something like this: 
-```bash
-# Available Tracks:
-
-# Track   Notes   Name
-#     1       0   example track 1
-#     2     433   example track 2
-#     3     488   example track 3
-#     4     506   example track 4
-#     5    1524   example track 5
-
-# Each line corresponds to each available track in order.
+```conf
+# Each line corresponds to each available channel in order.
 # ! Every line must be fully filled to prevent unexpected behavior !
 # ! i.e. There must be something before and after every comma !
 # ! The last line must end with a newline character !
 
-# Keyword, Base pitch, Max volume, Cutoff Velocity
-noteblock_harp, 66, 100, 0
-noteblock_harp, 66, 100, 0
-noteblock_harp, 66, 100, 0
-noteblock_harp, 66, 100, 0
-noteblock_harp, 66, 100, 0
+# Keyword, Base pitch, Max volume, Cutoff Velocity    # <Ch#>    Notes     Program
+# <Trk1>
+# <Trk2>
+noteblock_harp, 66, 100, 0    # <Ch0>       234    Flute
+noteblock_harp, 66, 100, 0    # <Ch6>       433    Flute
+# <Trk3>
+noteblock_harp, 66, 100, 0    # <Ch3>       488    Clarinet
+# <Trk4>
+noteblock_harp, 66, 100, 0    # <Ch0>       354    Trumpet
+noteblock_harp, 66, 100, 0    # <Ch1>       506    Muted Trumpet
+noteblock_harp, 66, 100, 0    # <Ch5>       527    Muted Trumpet
+# <Trk5>
+noteblock_harp, 66, 100, 0    # <Ch2>      1524    Bright Acoustic Piano
 ```
-Here you can edit these values to configure the output behavior. Each track gets its own independent configuration from each line in the order that they appear.
+Here you can edit these values to configure the output behavior. Each channel gets its own independent configuration from each line in the order that they appear.
 
 - Keyword
-  - The keyword that determines which sound is played for the corresponding track. All recognized keywords are provided in order in the Appendix.
+  - The keyword that determines which sound is played for the corresponding channel. All recognized keywords are provided in order in the Appendix.
 - Base Pitch
   - The base pitch of a sound from the website with no modifications as a midi pitch. For example, the noteblocks play an F#4 when not pitch-shifted, so the corresponding midi pitch would be 66. A table of midi pitches is provided in the Appendix.
 - Max Volume
   - The maximum volume that a sound can take. A midi note with the max velocity of 127 will be played at this volume. (The maximum volume is 600.)
 - Cutoff Velocity
-  - A midi note's velocity must be greater that this value to be included in the output. Used to exclude notes that are silent or not loud enough to hear. Set to the maximum velocity of 127 to exclude all notes to turn off a track.
+  - A midi note's velocity must be greater than this value to be included in the output. Used to exclude notes that are silent or not loud enough to hear. Set to the maximum velocity of 127 to exclude all notes to turn off a channel.
 
 Once done editing the config file, use it by passing it in as an argument:
 ```
