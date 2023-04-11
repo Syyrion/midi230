@@ -81,9 +81,12 @@ midi230 -c example.conf example.mid
 \*\* Default offset (based on the minecraft note blocks)
 
 ## Table of Keywords
+
+> **Note:** `_pause` cannot be used as a keyword. To disable a channel, set its cutoff velocity to 127.
+
 ||0|1|2|3|4|5|6|7|8|9|10|11|
 |-|-|-|-|-|-|-|-|-|-|-|-|-
-A|_pause|boom|bruh|bong|💀|👏|🐶|👽|🔔|💢|💨|🚫
+A|*~~\_pause~~*|boom|bruh|bong|💀|👏|🐶|👽|🔔|💢|💨|🚫
 B|💰|🏏|🤬|🚨|buzzer|🅰|e|eight|🍕|🐡|🦆|🦢
 C|📲|🌄|hitmarker|👌|🖐|🦀|🚬|whatsapp|😱|❗|slip|explosion
 D|🎉|pan|💿|airhorn|taiko_don|taiko_ka|🎹|robtopphone|🎻|🎸|hoenn|🎺
