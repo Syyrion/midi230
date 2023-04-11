@@ -3,9 +3,11 @@
 #include <string.h>
 
 /*
+    todo: Better config file syntax
+    todo: support multiple program changes per channel
     todo: Merge consecutive tempo changes
     todo: Handle extremely slow tempos by chaining silence
-    todo: Some very rare edge cases still exist apparently
+    todo: Support channel 10 percussion. This channel has no pitches. Every pitch is a different sound.
 */
 
 #define CHANNELS_PER_TRACK 16
@@ -695,6 +697,7 @@ struct event *getnextevent(FILE *stream, unsigned long *currenttick, unsigned ch
                 notedata->velocity = velocity;
 
                 struct channel *channel = track->channels[lownybble];
+                // Create a channel if there isn't one already
                 if (!channel)
                     channel = track->channels[lownybble] = newchannel();
                 ++(channel->notes);
@@ -709,10 +712,13 @@ struct event *getnextevent(FILE *stream, unsigned long *currenttick, unsigned ch
             case 0xC0:
             {
                 struct channel *channel = track->channels[lownybble];
+                // Create a channel if there isn't one already
                 if (!channel)
                     channel = track->channels[lownybble] = newchannel();
+                int p = fgetc(stream);
+                // Set the program name only if there isn't one already
                 if (!channel->program)
-                    channel->program = PROGRAM_NAMES[fgetc(stream)];
+                    channel->program = PROGRAM_NAMES[p];
                 break;
             }
 
@@ -798,7 +804,10 @@ struct event *getnextevent(FILE *stream, unsigned long *currenttick, unsigned ch
             case 0x03:
             {
                 if (track->name)
+                {
+                    ignore(stream, length);
                     break;
+                }
 
                 char *name = malloc(length + 1);
                 for (int i = 0; i < length; ++i)
